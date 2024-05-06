@@ -9,7 +9,7 @@ package main
 // Please do not change this file.
 //
 
-import "../mr"
+import "6.824/src/mr"
 import "time"
 import "os"
 import "fmt"
@@ -23,6 +23,7 @@ func main() {
 	m := mr.MakeMaster(os.Args[1:], 10)
 	for m.Done() == false {
 		time.Sleep(time.Second)
+		m.TimeControl()
 	}
 
 	time.Sleep(time.Second)
