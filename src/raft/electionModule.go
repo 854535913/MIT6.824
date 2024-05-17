@@ -3,7 +3,6 @@ package raft
 import (
 	"fmt"
 	"math/rand"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -12,6 +11,8 @@ type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
 	Term        int
 	CandidateId int
+	LastLogTerm int
+	LogLen      int
 }
 
 type RequestVoteReply struct {
@@ -33,12 +34,14 @@ func (rf *Raft) leaderElection() {
 	rf.voteInfo.VoteTerm = rf.currentTerm
 	rf.resetElectionTimer()
 	rf.persist()
-	fmt.Printf("竞选者%d 开始任期%d竞选\n", rf.me, rf.currentTerm)
+	fmt.Printf("Candidate%d 开始任期%d竞选\n", rf.me, rf.currentTerm)
 	args := RequestVoteArgs{
 		Term:        rf.currentTerm,
 		CandidateId: rf.me,
+		LogLen:      len(rf.logs),
+		LastLogTerm: rf.logs[len(rf.logs)-1].Term,
 	}
-	var mu sync.Mutex
+
 	var voteCounter int32
 	atomic.AddInt32(&voteCounter, 1)
 	for serverId, _ := range rf.peers {
@@ -46,7 +49,7 @@ func (rf *Raft) leaderElection() {
 			reply := RequestVoteReply{
 				Agree: false,
 			}
-			go rf.sendRequestVote(serverId, &args, &reply, &mu, voteCounter)
+			go rf.sendRequestVote(serverId, &args, &reply, voteCounter)
 		}
 	}
 }
@@ -61,27 +64,29 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 	if args.Term != rf.voteInfo.VoteTerm || rf.voteInfo.VoteFor != args.CandidateId {
-		rf.mu.Lock()
-		reply.Agree = true
-		rf.voteInfo.VoteFor = args.CandidateId
-		rf.voteInfo.VoteTerm = args.Term
-		rf.mu.Unlock()
+		myLastLogTerm := rf.logs[len(rf.logs)-1].Term
+
+		if args.LastLogTerm > myLastLogTerm || (args.LastLogTerm == myLastLogTerm && args.LogLen >= len(rf.logs)) {
+			rf.mu.Lock()
+			reply.Agree = true
+			rf.voteInfo.VoteFor = args.CandidateId
+			rf.voteInfo.VoteTerm = args.Term
+			rf.mu.Unlock()
+		}
 	}
 	return
 }
 
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply, mu *sync.Mutex, voteCounter int32) bool {
+func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply, voteCounter int32) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	if reply.Agree {
-		mu.Lock()
 		atomic.AddInt32(&voteCounter, 1)
-		mu.Unlock()
 	}
 	currentVotes := atomic.LoadInt32(&voteCounter)
 	if currentVotes*2 > int32(len(rf.peers)) {
-		fmt.Printf("竞选者%d 得票：%d 竞选成功\n", rf.me, currentVotes)
+		fmt.Printf("Candidate%d 得票：%d 竞选成功\n", rf.me, currentVotes)
 		rf.state = Leader
-		rf.messageLeader()
+		rf.leaderControl(false)
 	}
 	return ok
 }

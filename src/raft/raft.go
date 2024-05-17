@@ -14,6 +14,7 @@ package raft
 //   每当日志中提交了新条目，每个 Raft 节点应该向同一服务器中的服务（或测试器）发送一个 ApplyMsg。
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -52,15 +53,20 @@ type Raft struct {
 
 	// 你的数据在这里（2A, 2B, 2C）。
 	// 参考论文中的图 2，了解 Raft 服务器需要维护的状态描述。
-	state       RaftState
-	currentTerm int
-	voteInfo    struct {
-		VoteFor  int
-		VoteTerm int
+	state       RaftState //节点的角色
+	currentTerm int       //现在任期
+	voteInfo    struct {  //投票信息
+		VoteFor  int //投给了谁
+		VoteTerm int //这是第几轮投票
 	}
-	log          []string
-	heartBeat    time.Duration
-	electionTime time.Time
+	logs         []LogEntry    //要记录的信息
+	heartBeat    time.Duration //心跳周期
+	electionTime time.Time     //选举周期
+	commitIndex  int           //最高的已经被复制到大多数服务器的日志的索引
+	lastApplied  int           //最高的已经被应用到状态机日志的索引
+	nextIndex    []int         //记录leader下一次应该发送哪条日志给各个follower
+	matchIndex   []int         //记录各个follower已成功复制的最高日志条目的索引
+	applyChan    chan ApplyMsg
 }
 
 // 返回 currentTerm 和这个服务器是否认为自己是领导者。
@@ -111,13 +117,28 @@ func (rf *Raft) readPersist(data []byte) {
 // 如果该服务器不是领导者，则返回 false。否则立即开始协商并返回。
 // 不能保证此命令将永远提交到 Raft 日志中，因为领导者可能会失败或失去选举。即使 Raft 实例已被终止，此函数也应该优雅地返回。
 // 第一个返回值是如果命令最终被提交，该命令将出现的索引。第二个返回值是当前的任期。第三个返回值是 true，如果这个服务器认为它是领导者。
+type LogEntry struct {
+	Command interface{}
+	Term    int
+}
+
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
+	index := 0
+	term := 0
 	isLeader := true
 
 	// Your code here (2B).
+	if rf.state != Leader {
+		isLeader = false
+		return index, term, isLeader
+	}
 
+	// 初始化日志条目。并进行追加
+	appendLog := LogEntry{Command: command, Term: rf.currentTerm}
+	rf.logs = append(rf.logs, appendLog)
+	index = len(rf.logs) - 1
+	term = rf.currentTerm
+	fmt.Printf("Leader%d 收到log,任期%d\n", rf.me, rf.currentTerm)
 	return index, term, isLeader
 }
 
@@ -154,8 +175,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.voteInfo.VoteFor = -1
 	rf.voteInfo.VoteTerm = -1
 	rf.heartBeat = 100 * time.Millisecond
-	rf.resetElectionTimer()
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.nextIndex = make([]int, len(rf.peers))
+	for i := range rf.nextIndex {
+		rf.nextIndex[i] = 1
+	}
+	rf.matchIndex = make([]int, len(rf.peers))
+	rf.logs = make([]LogEntry, 1) //log从1开始，0号位置为空
+	rf.applyChan = applyCh
 
+	rf.resetElectionTimer()
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
@@ -168,7 +198,10 @@ func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		time.Sleep(rf.heartBeat)
 		if rf.state == Leader {
-			rf.messageLeader()
+			rf.leaderControl(false)
+		}
+		if rf.lastApplied < rf.commitIndex {
+			rf.lastApplied = rf.commitIndex
 		}
 		if time.Now().After(rf.electionTime) {
 			rf.leaderElection()
