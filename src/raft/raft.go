@@ -14,7 +14,6 @@ package raft
 //   每当日志中提交了新条目，每个 Raft 节点应该向同一服务器中的服务（或测试器）发送一个 ApplyMsg。
 
 import (
-	"fmt"
 	"sync"
 	"time"
 )
@@ -53,12 +52,9 @@ type Raft struct {
 
 	// 你的数据在这里（2A, 2B, 2C）。
 	// 参考论文中的图 2，了解 Raft 服务器需要维护的状态描述。
-	state       RaftState //节点的角色
-	currentTerm int       //现在任期
-	voteInfo    struct {  //投票信息
-		VoteFor  int //投给了谁
-		VoteTerm int //这是第几轮投票
-	}
+	state        RaftState     //节点的角色
+	currentTerm  int           //现在任期
+	VoteTerm     int           //投给了谁
 	logs         []LogEntry    //要记录的信息
 	heartBeat    time.Duration //心跳周期
 	electionTime time.Time     //选举周期
@@ -138,7 +134,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.logs = append(rf.logs, appendLog)
 	index = len(rf.logs) - 1
 	term = rf.currentTerm
-	fmt.Printf("Leader%d 收到log,任期%d\n", rf.me, rf.currentTerm)
+	rf.matchIndex[rf.me] = index
+	//fmt.Printf("Leader%d 收到log,任期%d\n", rf.me, rf.currentTerm)
 	return index, term, isLeader
 }
 
@@ -172,8 +169,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 	rf.state = Follower
 	rf.currentTerm = 0
-	rf.voteInfo.VoteFor = -1
-	rf.voteInfo.VoteTerm = -1
+	rf.VoteTerm = -1
 	rf.heartBeat = 100 * time.Millisecond
 	rf.commitIndex = 0
 	rf.lastApplied = 0
@@ -199,9 +195,6 @@ func (rf *Raft) ticker() {
 		time.Sleep(rf.heartBeat)
 		if rf.state == Leader {
 			rf.leaderControl(false)
-		}
-		if rf.lastApplied < rf.commitIndex {
-			rf.lastApplied = rf.commitIndex
 		}
 		if time.Now().After(rf.electionTime) {
 			rf.leaderElection()
